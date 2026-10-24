@@ -1,0 +1,12 @@
+# Copy to config.toml (gitignored).
+database = "data/messages.sqlite3"
+websocket_url = "ws://127.0.0.1:3001"
+token_env = "NAPCAT_TOKEN"
+
+[[conversations]]
+kind = "group"
+id = "123456789"
+
+[[conversations]]
+kind = "private"
+id = "987654321"
