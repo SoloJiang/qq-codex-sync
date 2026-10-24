@@ -73,7 +73,7 @@ fn ingest(c: &Connection, allow: &HashSet<(String,String)>, v: &Value) -> Result
     if kind!="group" && kind!="private" {return Ok(false)}
     let sender=sid(v.pointer("/sender/user_id")).or_else(||sid(v.get("user_id"))).unwrap_or_default();
     let chat=if kind=="group" {sid(v.get("group_id"))} else if sent || sid(v.get("self_id")).as_deref()==Some(sender.as_str()) {
-        sid(v.get("target_id")).or_else(||sid(v.get("user_id")))
+        sid(v.get("target_id")).or_else(||sid(v.get("peer_id")))
     } else {sid(v.get("user_id"))};
     let Some(chat)=chat else{return Ok(false)};
     if !allow.contains(&(kind.to_string(),chat.clone())) {return Ok(false)}
@@ -212,4 +212,41 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn setup() -> (Connection, HashSet<(String,String)>) {
+        let c=Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE messages (
+            kind TEXT NOT NULL, chat TEXT NOT NULL, id TEXT NOT NULL,
+            sender TEXT NOT NULL, time INTEGER NOT NULL, body TEXT NOT NULL,
+            raw TEXT NOT NULL, PRIMARY KEY(kind,chat,id));
+            CREATE INDEX idx_chat_time ON messages(kind,chat,time);").unwrap();
+        let allowed=[("group".to_string(),"123".to_string())].into_iter().collect();
+        (c, allowed)
+    }
+    #[test]
+    fn only_allowlisted_and_deduplicated() {
+        let (c,allow)=setup();
+        let msg=json!({"post_type":"message","message_type":"group",
+          "group_id":123,"message_id":1,"user_id":456,"time":10,
+          "message":[{"type":"text","data":{"text":"你好 Rust"}}]});
+        assert!(ingest(&c,&allow,&msg).unwrap());
+        assert!(!ingest(&c,&allow,&msg).unwrap());
+        let mut other=msg.clone();other["group_id"]=json!(999);
+        other["message_id"]=json!(2);
+        assert!(!ingest(&c,&allow,&other).unwrap());
+        let hits=query(&c,"search_messages",&json!({"query":"Rust"})).unwrap();
+        assert_eq!(hits.as_array().unwrap().len(),1);
+    }
+    #[test]
+    fn outbound_private_without_peer_is_not_stored() {
+        let (c,mut allow)=setup();
+        allow.insert(("private".to_string(),"42".to_string()));
+        let m=json!({"post_type":"message_sent","message_type":"private",
+          "self_id":42,"user_id":42,"message_id":10,"time":12,"message":"hey"});
+        assert!(!ingest(&c,&allow,&m).unwrap());
+    }
 }
